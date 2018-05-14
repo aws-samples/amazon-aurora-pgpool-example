@@ -1,0 +1,561 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+# Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this
+# software and associated documentation files (the "Software"), to deal in the Software
+# without restriction, including without limitation the rights to use, copy, modify,
+# merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Description: >
+  This template builds a pgpool middleware layer for an RDS cluster.
+
+Parameters:
+  MinSize:
+    Type: String
+    Description: Minimum number of pgpool servers
+    Default: "1"
+  MaxSize:
+    Type: String
+    Description: Maximum number of pgpool servers 
+    Default: "2"
+  DesiredCapacity:
+    Type: String
+    Description: Nominal Size of pgpool Env
+    Default: "1"
+  InstanceSize:
+    Type: String
+    Description: Instance size
+    Default: "t2.large"
+  VPC:
+    Type: "AWS::EC2::VPC::Id"
+    Description: "VPC ID for creating the application"
+  SubnetPublicA: 
+    Description: "First public subnet"
+    Type: "AWS::EC2::Subnet::Id"
+  SubnetPublicB: 
+    Description: "Second public subnet"
+    Type: "AWS::EC2::Subnet::Id"
+  SubnetPrivateA: 
+    Description: "First private subnet"
+    Type: "AWS::EC2::Subnet::Id"
+  SubnetPrivateB: 
+    Description: "Second private subnet"
+    Type: "AWS::EC2::Subnet::Id"
+  keyname:
+    Type: AWS::EC2::KeyPair::KeyName
+  DatabaseName:
+    Type: String
+    Default: pgpoolexample
+    MinLength: 1
+    MaxLength: 64
+    AllowedPattern: "[a-zA-Z][a-zA-Z0-9]*" 
+  DatabaseUser:
+    Type: String
+    MinLength: 1
+    MaxLength: 16
+    Default: pgpool
+    AllowedPattern: "[a-zA-Z][a-zA-Z0-9]*" 
+  DatabasePassword:
+    Type: String
+    MinLength: 8
+    MaxLength: 41
+    Default: pgp0o1Cred
+    NoEcho: true
+    AllowedPattern: "[a-zA-Z0-9]*" 
+  ClusterEndpoint:
+    Type: String
+  ReaderEndpoint:
+    Type: String
+  PgpoolFirewall:
+    Type: String
+  SshFirewall:
+    Type: String
+  ProjectTag:
+    Type: String
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      "AMALINUX" : "ami-1853ac65" # AMALINUX SEP 2016
+    us-east-2:
+      "AMALINUX" : "ami-71ca9114" # AMALINUX SEP 2016
+    us-west-1:
+      "AMALINUX" : "ami-de347abe" # AMALINUX SEP 2016
+    us-west-2:
+      "AMALINUX" : "ami-d874e0a0" # AMALINUX SEP 2017
+    ca-central-1:
+      "AMALINUX" : "ami-eb20928f" # AMALINUX SEP 2016 v01
+    eu-west-1:
+      "AMALINUX" : "ami-d41d58a7" # AMALINUX SEP 2016
+    eu-central-1:
+      "AMALINUX" : "ami-0044b96f" # AMALINUX SEP 2016
+    eu-west-2:
+      "AMALINUX" : "ami-bfe0eadb" # AMALINUX SEP 2016 v01
+    ap-southeast-1:
+      "AMALINUX" : "ami-7243e611" # AMALINUX SEP 2016
+    ap-southeast-2:
+      "AMALINUX" : "ami-55d4e436" # AMALINUX SEP 2016
+    ap-northeast-2:
+      "AMALINUX" : "ami-a04297ce" # AMALINUX SEP 2016
+    ap-northeast-1:
+      "AMALINUX" : "ami-1a15c77b" # AMALINUX SEP 2016
+    ap-south-1:
+      "AMALINUX" : "ami-cacbbea5" # AMALINUX SEP 2016
+    sa-east-1:
+      "AMALINUX" : "ami-b777e4db" # AMALINUX SEP 2016
+Resources:
+  AutoScalingGroup:
+    CreationPolicy:
+      ResourceSignal:
+        Count: !Ref DesiredCapacity
+        Timeout: "PT5M"
+    UpdatePolicy:
+      AutoScalingReplacingUpdate:
+        WillReplace: true
+    Type: "AWS::AutoScaling::AutoScalingGroup"
+    Properties:
+      Cooldown: "300"
+      DesiredCapacity: !Ref DesiredCapacity
+      HealthCheckGracePeriod: "300"
+      HealthCheckType: ELB
+      LaunchConfigurationName: !Ref LaunchConfiguration
+      TargetGroupARNs:
+        - !Ref ELBTargetGroup
+      MaxSize: !Ref MaxSize
+      MinSize: !Ref MinSize
+      VPCZoneIdentifier:
+        - !Ref SubnetPrivateA
+        - !Ref SubnetPrivateB
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+          PropagateAtLaunch: 'true'
+  LaunchConfiguration:
+    Type: "AWS::AutoScaling::LaunchConfiguration"
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", AMALINUX]
+      InstanceType: !Ref InstanceSize
+      KeyName: !Ref keyname
+      SecurityGroups:
+        - !Ref PgpoolFirewall
+        - !Ref SshFirewall
+      UserData:
+        "Fn::Base64":
+          !Sub |
+            #!/bin/bash
+            yum update -y aws-cfn-bootstrap # good practice - always do this.
+            /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource LaunchConfiguration --configsets pgpool --region ${AWS::Region}
+            yum -y update
+            curl 127.0.0.1/index.html | grep pgpool
+            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          pgpool:
+            - "configure_cfn"
+            - "install_www"
+            - "config_pgpool"
+            - "start_pgpool"
+        configure_cfn:
+          files:
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.LaunchConfiguration.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource LaunchConfiguration --configsets pgpool --region ${AWS::Region}
+              mode: "000400"
+              owner: root
+              group: root
+            /etc/cfn/cfn-hup.conf:
+              content: !Sub |
+                [main]
+                stack=${AWS::StackId}
+                region=${AWS::Region}
+                verbose=true
+                interval=5
+              mode: "000400"
+              owner: root
+              group: root
+          services:
+            sysvinit:
+              cfn-hup:
+                enabled: "true"
+                ensureRunning: "true"
+                files:
+                  - "/etc/cfn/cfn-hup.conf"
+                  - "/etc/cfn/hooks.d/cfn-auto-reloader.conf"
+        install_www:
+          packages:
+            yum:
+              httpd: []
+          files:
+            /var/www/html/index.html:
+              content: "Hello from pgpool"
+          services:
+            sysvinit:
+              httpd:
+                enabled: "true"
+                ensureRunning: "true"
+        config_pgpool:
+          commands:
+            a_packages:
+              cwd: "/tmp"
+              command:  'yum groupinstall -y "Development Tools" && yum install -y postgresql-devel'
+            b_download_zip:
+              cwd: "/tmp"
+              command:  "wget www.pgpool.net/download.php?f=pgpool-II-3.7.2.tar.gz -O /tmp/pgpool-II-3.7.2.tar.gz"
+            c_unpack_zip:
+              cwd: "/opt"
+              command:  "tar zxf /tmp/pgpool-II-3.7.2.tar.gz"
+            d_configure:
+              cwd: "/opt/pgpool-II-3.7.2"
+              command: "./configure"
+            e_make:
+              cwd: "/opt/pgpool-II-3.7.2"
+              command: "make"
+            f_install:
+              cwd: "/opt/pgpool-II-3.7.2"
+              command: "make install"
+            g_mkdirs:
+              cwd: "/"
+              command: "mkdir -p /var/run/pgpool && mkdir -p /var/log/pgpool && chmod -R 777 /var/run/pgpool && chmod -R 777 /var/log/pgpool"
+            h_passwd:
+              command: !Sub "/usr/local/bin/pg_md5 -m -u ${DatabaseUser} ${DatabasePassword}"
+            i_syslog:
+              command: 'echo "local0.*    /var/log/pgpool.log" >> /etc/rsyslog.conf'
+            j_syslogd:
+              command: 'service rsyslog restart'
+          files:
+            /usr/local/etc/pool_hba.conf:
+              content: !Sub |
+                local   all         all                               trust
+                host    all         all         127.0.0.1/32          trust
+                host    all         all         ::1/128               trust
+                host    all         all         0.0.0.0/0               md5
+              mode: "000444"
+              owner: root
+              group: root
+            /usr/local/etc/pgpool.conf:
+              content: !Sub |
+                listen_addresses = '*'
+                port = 5432
+                socket_dir = '/tmp'
+                listen_backlog_multiplier = 2
+                serialize_accept = off
+                pcp_listen_addresses = '*'
+                pcp_port = 9898
+                pcp_socket_dir = '/tmp'
+                backend_hostname0 = ${ClusterEndpoint}
+                backend_port0 = 3306
+                backend_weight0 = 1
+                backend_data_directory0 = '/var/lib/pgsql/data'
+                backend_flag0 = 'ALWAYS_MASTER'
+                backend_hostname1 = ${ReaderEndpoint}
+                backend_port1 = 3306
+                backend_weight1 = 2
+                backend_data_directory1 = '/data1'
+                backend_flag1 = 'ALLOW_TO_FAILOVER'
+                enable_pool_hba = on
+                pool_passwd = 'pool_passwd'
+                authentication_timeout = 60
+                ssl = on
+                num_init_children = 32
+                max_pool = 4
+                child_life_time = 300
+                child_max_connections = 0
+                connection_life_time = 0
+                client_idle_limit = 0
+                log_destination = 'syslog,stderr'
+                log_line_prefix = '%t: pid %p: '   
+                log_connections = off
+                log_hostname = on
+                log_statement = on
+                log_per_node_statement = on
+                log_standby_delay = 'none'
+                log_min_messages = 'INFO'
+                syslog_facility = 'LOCAL0'
+                syslog_ident = 'pgpool'
+                debug_level = 0
+                pid_file_name = '/var/run/pgpool/pgpool.pid'
+                logdir = '/var/log/pgpool'
+                connection_cache = on
+                reset_query_list = 'ABORT; DISCARD ALL'
+                replication_mode = off
+                replicate_select = off
+                insert_lock = on
+                lobj_lock_table = ''
+                replication_stop_on_mismatch = off
+                failover_if_affected_tuples_mismatch = off
+                load_balance_mode = on
+                ignore_leading_white_space = on
+                white_function_list = ''
+                black_function_list = 'nextval,setval,nextval,setval'
+                database_redirect_preference_list = ''
+                app_name_redirect_preference_list = ''
+                allow_sql_comments = off
+                master_slave_mode = on
+                master_slave_sub_mode = 'stream'
+                sr_check_period = 0
+                sr_check_user = 'nobody'
+                sr_check_password = ''
+                sr_check_database = 'postgres'
+                delay_threshold = 0
+                follow_master_command = ''
+                health_check_period = 5
+                health_check_timeout = 20
+                health_check_user = ${DatabaseUser}
+                health_check_password = ${DatabasePassword}
+                health_check_database = ${DatabaseName}
+                health_check_max_retries = 20 
+                health_check_retry_delay = 1
+                connect_timeout = 10000
+                failover_command = ''
+                failback_command = ''
+                fail_over_on_backend_error = off
+                search_primary_node_timeout = 10
+                recovery_user = 'nobody'
+                recovery_password = ''
+                recovery_1st_stage_command = ''
+                recovery_2nd_stage_command = ''
+                recovery_timeout = 90
+                client_idle_limit_in_recovery = 0
+                use_watchdog = off
+                trusted_servers = ''
+                ping_path = '/bin'
+                wd_hostname = ''
+                wd_port = 9000
+                wd_priority = 1
+                wd_authkey = ''
+                wd_ipc_socket_dir = '/tmp'
+                delegate_IP = ''
+                if_cmd_path = '/sbin'
+                if_up_cmd = 'ip addr add $_IP_$/24 dev eth0 label eth0:0'
+                if_down_cmd = 'ip addr del $_IP_$/24 dev eth0'
+                arping_path = '/usr/sbin'
+                arping_cmd = 'arping -U $_IP_$ -w 1'
+                clear_memqcache_on_escalation = on
+                wd_escalation_command = ''
+                wd_de_escalation_command = ''
+                wd_monitoring_interfaces_list = ''  
+                wd_lifecheck_method = 'heartbeat'
+                wd_interval = 10
+                wd_heartbeat_port = 9694
+                wd_heartbeat_keepalive = 2
+                wd_heartbeat_deadtime = 30
+                heartbeat_destination0 = 'host0_ip1'
+                heartbeat_destination_port0 = 9694 
+                heartbeat_device0 = ''
+                wd_life_point = 3
+                wd_lifecheck_query = 'SELECT 1'
+                wd_lifecheck_dbname = 'template1'
+                wd_lifecheck_user = 'nobody'
+                wd_lifecheck_password = ''
+                relcache_expire = 0
+                relcache_size = 256
+                check_temp_table = on
+                check_unlogged_table = on
+                memory_cache_enabled = off
+                memqcache_method = 'shmem'
+                memqcache_memcached_host = 'localhost'
+                memqcache_memcached_port = 11211
+                memqcache_total_size = 67108864
+                memqcache_max_num_cache = 1000000
+                memqcache_expire = 0
+                memqcache_auto_cache_invalidation = on
+                memqcache_maxcache = 409600
+                memqcache_cache_block_size = 1048576
+                memqcache_oiddir = '/var/log/pgpool/oiddir'
+                white_memqcache_table_list = ''
+                black_memqcache_table_list = ''
+        start_pgpool:
+          files:
+            /etc/init.d/pgpool:
+              content: !Sub |
+                #!/bin/sh
+                #
+                # pgpool - the postgres replication daemon.
+                #
+                # chkconfig: 2345 64 36
+
+                # description: start and stop the pgpool daemon
+
+                ### BEGIN INIT INFO
+                # Provides: pgpool
+                # Required-Start: $local_fs $network $remote_fs
+                # Should-Start: ypbind nscd ldap ntpd xntpd
+                # Required-Stop: $local_fs $network $remote_fs
+                # Default-Start:  2 3 4 5
+                # Default-Stop: 0 1 6
+                # Short-Description: start and stop pgpool
+                # Description: pgpool is pure awesomeness.
+                ### END INIT INFO
+
+                # Source function library.
+                . /etc/rc.d/init.d/functions
+
+                # command that needs to run:
+                # sudo -u postgres pgpool -f /usr/local/etc/pgpool.conf -F /usr/local/etc/pcp.conf 
+
+                exec="/usr/local/bin/pgpool"
+                prog="pgpool"
+
+                user="ec2-user"
+
+                pgpool_config="/usr/local/etc/pgpool.conf"
+                pcp_config="/usr/local/etc/pool_passwd"
+
+                [ -e /etc/sysconfig/$prog ] && . /etc/sysconfig/$prog
+
+                lockfile=/var/lock/subsys/$prog
+
+                start() {
+                    [ -x $exec ] || exit 5
+                    [ -f $pgpool_config ] || exit 6
+                    [ -f $pcp_config ] || exit 6
+                    echo -n $"Starting $prog: "
+                    # if not running, start it up here, usually something like "daemon $exec"
+
+                    pgpool_command
+                    retval=$?
+                    echo
+                    [ $retval -eq 0 ] && touch $lockfile
+                    return $retval
+                }
+
+                stop() {
+                    echo -n $"Stopping $prog: "
+                    # stop it here, often "killproc $prog"
+
+                    echo pgpool_command stop
+
+                    pgpool_command stop
+                    retval=$?
+                    echo
+                    [ $retval -eq 0 ] && rm -f $lockfile
+                    return $retval
+                }
+
+                restart() {
+                    stop
+                    start
+                }
+
+                reload() {
+                    pgpool_command reload
+                }
+
+                force_reload() {
+                    restart
+                }
+
+                rh_status() {
+                    # run checks to determine if the service is running or use generic status
+                    status $prog
+                }
+
+                rh_status_q() {
+                    rh_status >/dev/null 2>&1
+                }
+
+                pgpool_command() {
+                    sudo -u $user $exec -f "$pgpool_config" -F "$pcp_config" $1
+                }
+
+
+                case "$1" in
+                    start)
+                        rh_status_q && exit 0
+                        $1
+                        ;;
+                    stop)
+                        rh_status_q || exit 0
+                        $1
+                        ;;
+                    restart)
+                        $1
+                        ;;
+                    reload)
+                        rh_status_q || exit 7
+                        $1
+                        ;;
+                    force-reload)
+                        force_reload
+                        ;;
+                    status)
+                        rh_status
+                        ;;
+                    condrestart|try-restart)
+                        rh_status_q || exit 0
+                        restart
+                        ;;
+                    *)
+                        echo $"Usage: $0 {start|stop|status|restart|condrestart|try-restart|reload|force-reload}"
+                        exit 2
+                esac
+                exit $?
+              mode: "000755"
+          services:
+            sysvinit:
+              pgpool:
+                enabled: "true"
+                ensureRunning: "true"
+                files:
+                  - "/etc/init.d/pgpool"
+
+  JumpServer:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", AMALINUX]
+      InstanceType: !Ref InstanceSize
+      KeyName: !Ref keyname
+      SubnetId: 
+        Ref: SubnetPublicA
+      SecurityGroupIds: 
+        - !Ref SshFirewall
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+  NetELB:
+    Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    Properties:
+      Subnets:
+        - !Ref SubnetPublicA
+        - !Ref SubnetPublicB
+      Type: network
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+  ELBListener:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties: 
+      DefaultActions:
+        - TargetGroupArn: !Ref ELBTargetGroup
+          Type: "forward"
+      LoadBalancerArn: !Ref NetELB
+      Port: 5432
+      Protocol: TCP
+  ELBTargetGroup:
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    Properties:
+      HealthCheckPort: 80
+      HealthCheckProtocol: HTTP
+      Port: 5432
+      Protocol: TCP
+      VpcId: !Ref VPC
+Outputs:
+  Endpoint:
+    Description: Database URL 
+    Value: !GetAtt NetELB.DNSName
+  JumpAddress:
+    Description: IP address of Jump server
+    Value: !GetAtt JumpServer.PublicIp
