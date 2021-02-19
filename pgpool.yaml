@@ -52,6 +52,12 @@ Parameters:
     Type: "AWS::EC2::Subnet::Id"
   keyname:
     Type: AWS::EC2::KeyPair::KeyName
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Description: Latest AMI ID
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    AllowedValues:
+      - /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
   DatabaseName:
     Type: String
     Default: pgpoolexample
@@ -82,36 +88,6 @@ Parameters:
   ProjectTag:
     Type: String
 
-Mappings:
-  RegionMap:
-    us-east-1:
-      "AMALINUX" : "ami-1853ac65" # AMALINUX SEP 2016
-    us-east-2:
-      "AMALINUX" : "ami-71ca9114" # AMALINUX SEP 2016
-    us-west-1:
-      "AMALINUX" : "ami-de347abe" # AMALINUX SEP 2016
-    us-west-2:
-      "AMALINUX" : "ami-d874e0a0" # AMALINUX SEP 2017
-    ca-central-1:
-      "AMALINUX" : "ami-eb20928f" # AMALINUX SEP 2016 v01
-    eu-west-1:
-      "AMALINUX" : "ami-d41d58a7" # AMALINUX SEP 2016
-    eu-central-1:
-      "AMALINUX" : "ami-0044b96f" # AMALINUX SEP 2016
-    eu-west-2:
-      "AMALINUX" : "ami-bfe0eadb" # AMALINUX SEP 2016 v01
-    ap-southeast-1:
-      "AMALINUX" : "ami-7243e611" # AMALINUX SEP 2016
-    ap-southeast-2:
-      "AMALINUX" : "ami-55d4e436" # AMALINUX SEP 2016
-    ap-northeast-2:
-      "AMALINUX" : "ami-a04297ce" # AMALINUX SEP 2016
-    ap-northeast-1:
-      "AMALINUX" : "ami-1a15c77b" # AMALINUX SEP 2016
-    ap-south-1:
-      "AMALINUX" : "ami-cacbbea5" # AMALINUX SEP 2016
-    sa-east-1:
-      "AMALINUX" : "ami-b777e4db" # AMALINUX SEP 2016
 Resources:
   AutoScalingGroup:
     CreationPolicy:
@@ -142,7 +118,7 @@ Resources:
   LaunchConfiguration:
     Type: "AWS::AutoScaling::LaunchConfiguration"
     Properties:
-      ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", AMALINUX]
+      ImageId: !Ref AmiId
       InstanceType: !Ref InstanceSize
       KeyName: !Ref keyname
       SecurityGroups:
@@ -210,21 +186,21 @@ Resources:
           commands:
             a_packages:
               cwd: "/tmp"
-              command:  'yum groupinstall -y "Development Tools" && yum install -y postgresql-devel'
+              command:  'yum groupinstall -y "Development Tools" && amazon-linux-extras enable postgresql11 && yum clean metadata && yum install -y postgresql postgresql-devel'
             b_download_zip:
               cwd: "/tmp"
-              command:  "wget www.pgpool.net/download.php?f=pgpool-II-3.7.2.tar.gz -O /tmp/pgpool-II-3.7.2.tar.gz"
+              command:  "wget www.pgpool.net/mediawiki/download.php?f=pgpool-II-4.2.1.tar.gz -O /tmp/pgpool-II-4.2.1.tar.gz"
             c_unpack_zip:
               cwd: "/opt"
-              command:  "tar zxf /tmp/pgpool-II-3.7.2.tar.gz"
+              command:  "tar zxf /tmp/pgpool-II-4.2.1.tar.gz"
             d_configure:
-              cwd: "/opt/pgpool-II-3.7.2"
+              cwd: "/opt/pgpool-II-4.2.1"
               command: "./configure"
             e_make:
-              cwd: "/opt/pgpool-II-3.7.2"
+              cwd: "/opt/pgpool-II-4.2.1"
               command: "make"
             f_install:
-              cwd: "/opt/pgpool-II-3.7.2"
+              cwd: "/opt/pgpool-II-4.2.1"
               command: "make install"
             g_mkdirs:
               cwd: "/"
@@ -247,50 +223,58 @@ Resources:
               group: root
             /usr/local/etc/pgpool.conf:
               content: !Sub |
+                backend_clustering_mode = 'streaming_replication'
                 listen_addresses = '*'
                 port = 5432
                 socket_dir = '/tmp'
-                listen_backlog_multiplier = 2
-                serialize_accept = off
+                reserved_connections = 0
                 pcp_listen_addresses = '*'
                 pcp_port = 9898
                 pcp_socket_dir = '/tmp'
-                backend_hostname0 = ${ClusterEndpoint}
+                listen_backlog_multiplier = 2
+                serialize_accept = off
+                backend_hostname0 = '${ClusterEndpoint}'
                 backend_port0 = 3306
                 backend_weight0 = 1
-                backend_data_directory0 = '/var/lib/pgsql/data'
-                backend_flag0 = 'ALWAYS_MASTER'
-                backend_hostname1 = ${ReaderEndpoint}
+                backend_data_directory0 = '/data'
+                backend_flag0 = 'ALWAYS_PRIMARY'
+                backend_application_name0 = 'server0'
+                backend_hostname1 = '${ReaderEndpoint}'
                 backend_port1 = 3306
                 backend_weight1 = 2
                 backend_data_directory1 = '/data1'
-                backend_flag1 = 'ALLOW_TO_FAILOVER'
+                backend_flag1 = 'DISALLOW_TO_FAILOVER'
+                backend_application_name1 = 'server1'
                 enable_pool_hba = on
                 pool_passwd = 'pool_passwd'
-                authentication_timeout = 60
+                authentication_timeout = 1min
+                allow_clear_text_frontend_auth = off
                 ssl = on
+                ssl_ciphers = 'HIGH:MEDIUM:+3DES:!aNULL'
+                ssl_prefer_server_ciphers = off
+                ssl_ecdh_curve = 'prime256v1'
+                ssl_dh_params_file = ''
                 num_init_children = 32
                 max_pool = 4
-                child_life_time = 300
+                child_life_time = 5min
                 child_max_connections = 0
                 connection_life_time = 0
                 client_idle_limit = 0
                 log_destination = 'syslog,stderr'
-                log_line_prefix = '%t: pid %p: '   
+                log_line_prefix = '%t: pid %p: '   # printf-style string to output at beginning of each log line.
                 log_connections = off
+                log_disconnections = off
                 log_hostname = on
                 log_statement = on
                 log_per_node_statement = on
-                log_standby_delay = 'none'
-                log_min_messages = 'INFO'
+                log_client_messages = off
+                log_standby_delay = 'if_over_threshold'
                 syslog_facility = 'LOCAL0'
                 syslog_ident = 'pgpool'
-                debug_level = 0
                 pid_file_name = '/var/run/pgpool/pgpool.pid'
                 logdir = '/var/log/pgpool'
                 connection_cache = on
                 reset_query_list = 'ABORT; DISCARD ALL'
-                replication_mode = off
                 replicate_select = off
                 insert_lock = on
                 lobj_lock_table = ''
@@ -298,63 +282,72 @@ Resources:
                 failover_if_affected_tuples_mismatch = off
                 load_balance_mode = on
                 ignore_leading_white_space = on
-                white_function_list = ''
-                black_function_list = 'nextval,setval,nextval,setval'
+                read_only_function_list = ''
+                write_function_list = ''
+                primary_routing_query_pattern_list = ''
                 database_redirect_preference_list = ''
                 app_name_redirect_preference_list = ''
                 allow_sql_comments = off
-                master_slave_mode = on
-                master_slave_sub_mode = 'stream'
+                disable_load_balance_on_write = 'transaction'
+                dml_adaptive_object_relationship_list= ''
+                statement_level_load_balance = off
                 sr_check_period = 0
                 sr_check_user = 'nobody'
                 sr_check_password = ''
                 sr_check_database = 'postgres'
                 delay_threshold = 0
-                follow_master_command = ''
-                health_check_period = 5
+                follow_primary_command = ''
+                health_check_period = 0
                 health_check_timeout = 20
-                health_check_user = ${DatabaseUser}
-                health_check_password = ${DatabasePassword}
-                health_check_database = ${DatabaseName}
-                health_check_max_retries = 20 
+                health_check_user = '${DatabaseUser}'
+                health_check_password = '${DatabasePassword}'
+                health_check_database = '${DatabaseName}'
+                health_check_max_retries = 0
                 health_check_retry_delay = 1
                 connect_timeout = 10000
                 failover_command = ''
                 failback_command = ''
-                fail_over_on_backend_error = off
-                search_primary_node_timeout = 10
+                failover_on_backend_error = off
+                detach_false_primary = off
+                search_primary_node_timeout = 5min
                 recovery_user = 'nobody'
                 recovery_password = ''
                 recovery_1st_stage_command = ''
                 recovery_2nd_stage_command = ''
                 recovery_timeout = 90
                 client_idle_limit_in_recovery = 0
+                auto_failback = off
+                auto_failback_interval = 1min
                 use_watchdog = off
                 trusted_servers = ''
                 ping_path = '/bin'
-                wd_hostname = ''
-                wd_port = 9000
+                hostname0 = ''
+                wd_port0 = 9000
+                pgpool_port0 = 9999
                 wd_priority = 1
                 wd_authkey = ''
                 wd_ipc_socket_dir = '/tmp'
                 delegate_IP = ''
                 if_cmd_path = '/sbin'
-                if_up_cmd = 'ip addr add $_IP_$/24 dev eth0 label eth0:0'
-                if_down_cmd = 'ip addr del $_IP_$/24 dev eth0'
+                if_up_cmd = '/usr/bin/sudo /sbin/ip addr add $_IP_$/24 dev eth0 label eth0:0'
+                if_down_cmd = '/usr/bin/sudo /sbin/ip addr del $_IP_$/24 dev eth0'
                 arping_path = '/usr/sbin'
-                arping_cmd = 'arping -U $_IP_$ -w 1'
+                arping_cmd = '/usr/bin/sudo /usr/sbin/arping -U $_IP_$ -w 1 -I eth0'
                 clear_memqcache_on_escalation = on
                 wd_escalation_command = ''
                 wd_de_escalation_command = ''
-                wd_monitoring_interfaces_list = ''  
+                failover_when_quorum_exists = on
+                failover_require_consensus = on
+                allow_multiple_failover_requests_from_node = off
+                enable_consensus_with_half_votes = off
+                wd_monitoring_interfaces_list = ''
                 wd_lifecheck_method = 'heartbeat'
                 wd_interval = 10
-                wd_heartbeat_port = 9694
+                heartbeat_hostname0 = ''
+                heartbeat_port0 = 9694
+                heartbeat_device0 = ''
                 wd_heartbeat_keepalive = 2
                 wd_heartbeat_deadtime = 30
-                heartbeat_destination0 = 'host0_ip1'
-                heartbeat_destination_port0 = 9694 
-                heartbeat_device0 = ''
                 wd_life_point = 3
                 wd_lifecheck_query = 'SELECT 1'
                 wd_lifecheck_dbname = 'template1'
@@ -362,21 +355,23 @@ Resources:
                 wd_lifecheck_password = ''
                 relcache_expire = 0
                 relcache_size = 256
-                check_temp_table = on
+                check_temp_table = catalog
                 check_unlogged_table = on
+                enable_shared_relcache = on
+                relcache_query_target = primary
                 memory_cache_enabled = off
                 memqcache_method = 'shmem'
                 memqcache_memcached_host = 'localhost'
                 memqcache_memcached_port = 11211
-                memqcache_total_size = 67108864
+                memqcache_total_size = 64MB
                 memqcache_max_num_cache = 1000000
                 memqcache_expire = 0
                 memqcache_auto_cache_invalidation = on
-                memqcache_maxcache = 409600
-                memqcache_cache_block_size = 1048576
+                memqcache_maxcache = 400kB
+                memqcache_cache_block_size = 1MB
                 memqcache_oiddir = '/var/log/pgpool/oiddir'
-                white_memqcache_table_list = ''
-                black_memqcache_table_list = ''
+                cache_safe_memqcache_table_list = ''
+                cache_unsafe_memqcache_table_list = ''
         start_pgpool:
           files:
             /etc/init.d/pgpool:
@@ -515,7 +510,7 @@ Resources:
   JumpServer:
     Type: "AWS::EC2::Instance"
     Properties:
-      ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", AMALINUX]
+      ImageId: !Ref AmiId
       InstanceType: !Ref InstanceSize
       KeyName: !Ref keyname
       SubnetId: 
