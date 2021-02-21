@@ -64,6 +64,7 @@ Resources:
     Properties:
       DatabaseName: !Ref DatabaseName
       Engine: aurora-postgresql
+      EngineVersion: 11.9
       MasterUsername: !Ref DatabaseUser
       MasterUserPassword: !Ref DatabasePassword
       DBSubnetGroupName: !Ref DBSubnets
@@ -79,6 +80,7 @@ Resources:
     Properties:
       DBClusterIdentifier: !Ref DBAuroraCluster
       Engine: aurora-postgresql
+      EngineVersion: 11.9
       DBInstanceClass: !Ref DbInstanceSize
       DBSubnetGroupName: !Ref DBSubnets
       DBParameterGroupName: !Ref DBParamGroup
@@ -91,6 +93,7 @@ Resources:
     Properties:
       DBClusterIdentifier: !Ref DBAuroraCluster
       Engine: aurora-postgresql
+      EngineVersion: 11.9
       DBInstanceClass: !Ref DbInstanceSize
       DBSubnetGroupName: !Ref DBSubnets
       DBParameterGroupName: !Ref DBParamGroup
@@ -103,6 +106,7 @@ Resources:
     Properties:
       DBClusterIdentifier: !Ref DBAuroraCluster
       Engine: aurora-postgresql
+      EngineVersion: 11.9
       DBInstanceClass: !Ref DbInstanceSize
       DBSubnetGroupName: !Ref DBSubnets
       DBParameterGroupName: !Ref DBParamGroup
@@ -123,7 +127,7 @@ Resources:
     Type: "AWS::RDS::DBParameterGroup"
     Properties: 
       Description: Parameter group for RDS cluster
-      Family: manfred9.6
+      Family: aurora-postgresql11
       Tags:
         - Key: Project
           Value: !Ref ProjectTag
@@ -131,14 +135,13 @@ Resources:
     Type: "AWS::RDS::DBClusterParameterGroup"
     Properties: 
       Description: Parameter group for RDS cluster
-      Family: manfred9.6
+      Family: aurora-postgresql11
       Parameters:
         timezone: "UTC"
       Tags:
         - Key: Project
           Value: !Ref ProjectTag
   
-
 Outputs:
   DBClusterEndpoint:
     Description: Aurora cluster endpoint
